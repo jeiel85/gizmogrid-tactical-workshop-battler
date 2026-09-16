@@ -58,12 +58,33 @@ export function initCombatEntity(
 export function processCombatTick(
   player: CombatEntity,
   enemy: CombatEntity,
-  pulseDeltaSec: number
+  pulseDeltaSec: number,
+  pulseCount: number = 0
 ): CombatTickResult {
   const nextPlayer: CombatEntity = { ...player };
   const nextEnemy: CombatEntity = { ...enemy };
   const logs: CombatLogEntry[] = [];
   const floatingNumbers: FloatingNumber[] = [];
+
+  // Sudden Death Fatigue: If combat exceeds 25 pulses (approx 15 seconds), boilers overheat!
+  if (pulseCount >= 25) {
+    const fatigueDmg = Math.min(50, 4 + Math.floor((pulseCount - 25) * 2));
+    nextPlayer.hp = Math.max(0, nextPlayer.hp - fatigueDmg);
+    nextEnemy.hp = Math.max(0, nextEnemy.hp - fatigueDmg);
+
+    floatingNumbers.push(
+      { id: `fn_fatigue_p_${Date.now()}`, x: 25, y: 35, value: fatigueDmg, type: 'crit' },
+      { id: `fn_fatigue_e_${Date.now()}`, x: 75, y: 35, value: fatigueDmg, type: 'crit' }
+    );
+
+    logs.push({
+      id: `log_fatigue_${pulseCount}`,
+      timestamp: new Date().toLocaleTimeString(),
+      text: `⚠️ [보일러 과열] 장기전 돌입으로 양측 머신에 ${fatigueDmg}의 과열 누전 피해!`,
+      type: 'destroy',
+      isPlayerSource: true
+    });
+  }
 
   // Update Overdrive Timers
   if (nextPlayer.isOverdriveActive) {
@@ -110,8 +131,8 @@ export function processCombatTick(
 
   // --- 1. Player Gadgets Action ---
   const playerCrit = nextPlayer.isOverdriveActive;
-  nextPlayer.gridSnapshot.placedGizmos.forEach(gizmo => {
-    if (!gizmo.isPowered || gizmo.isOverheated) return;
+  for (const gizmo of nextPlayer.gridSnapshot.placedGizmos) {
+    if (!gizmo.isPowered || gizmo.isOverheated) continue;
 
     if (gizmo.itemData.gizmoType === 'Weapon') {
       let dmg = gizmo.itemData.outputEffectValue;
@@ -135,29 +156,32 @@ export function processCombatTick(
         type: isCrit ? 'critical' : 'attack',
         isPlayerSource: true
       });
+
+      // If enemy is destroyed by this hit, break immediately!
+      if (nextEnemy.hp <= 0) break;
     } else if (gizmo.itemData.gizmoType === 'Shield') {
       const shieldVal = gizmo.itemData.outputEffectValue;
       if (gizmo.itemData.itemId === 'auto_repair_wrench') {
-        // Healing
-        const prevHp = nextPlayer.hp;
-        nextPlayer.hp = Math.min(nextPlayer.maxHp, nextPlayer.hp + shieldVal);
-        const healed = nextPlayer.hp - prevHp;
-        floatingNumbers.push({
-          id: `fn_heal_${Date.now()}_${Math.random()}`,
-          x: 25,
-          y: 60,
-          value: healed,
-          type: 'heal'
-        });
-        logs.push({
-          id: `log_${Date.now()}_p_heal`,
-          timestamp: new Date().toLocaleTimeString(),
-          text: `🔧 [아군] 자동 수리 키트 작동! 본체 체력 +${healed} 수리 완료.`,
-          type: 'shield',
-          isPlayerSource: true
-        });
+        if (nextPlayer.hp > 0) {
+          const prevHp = nextPlayer.hp;
+          nextPlayer.hp = Math.min(nextPlayer.maxHp, nextPlayer.hp + shieldVal);
+          const healed = nextPlayer.hp - prevHp;
+          floatingNumbers.push({
+            id: `fn_heal_${Date.now()}_${Math.random()}`,
+            x: 25,
+            y: 60,
+            value: healed,
+            type: 'heal'
+          });
+          logs.push({
+            id: `log_${Date.now()}_p_heal`,
+            timestamp: new Date().toLocaleTimeString(),
+            text: `🔧 [아군] 자동 수리 키트 작동! 본체 체력 +${healed} 수리 완료.`,
+            type: 'shield',
+            isPlayerSource: true
+          });
+        }
       } else {
-        // Shield charge
         nextPlayer.shield = Math.min(nextPlayer.maxShield, nextPlayer.shield + shieldVal);
         soundManager.playShield();
         floatingNumbers.push({
@@ -169,12 +193,33 @@ export function processCombatTick(
         });
       }
     }
-  });
+  }
 
-  // --- 2. Enemy Gadgets Action ---
+  // If enemy was destroyed by player's attacks, stop here - no counterattack or zombie heal!
+  if (nextEnemy.hp <= 0) {
+    return {
+      player: nextPlayer,
+      enemy: nextEnemy,
+      logs: [
+        ...logs,
+        {
+          id: `log_${Date.now()}_enemy_destroyed`,
+          timestamp: new Date().toLocaleTimeString(),
+          text: `💥 [적 파괴!] ${nextEnemy.name}의 동력 코어가 파괴되었습니다!`,
+          type: 'destroy',
+          isPlayerSource: true
+        }
+      ],
+      floatingNumbers,
+      isFinished: true,
+      winner: 'player'
+    };
+  }
+
+  // --- 2. Enemy Gadgets Action (Only if enemy is still alive) ---
   const enemyCrit = nextEnemy.isOverdriveActive;
-  nextEnemy.gridSnapshot.placedGizmos.forEach(gizmo => {
-    if (!gizmo.isPowered || gizmo.isOverheated) return;
+  for (const gizmo of nextEnemy.gridSnapshot.placedGizmos) {
+    if (!gizmo.isPowered || gizmo.isOverheated) continue;
 
     if (gizmo.itemData.gizmoType === 'Weapon') {
       let dmg = gizmo.itemData.outputEffectValue;
@@ -191,10 +236,23 @@ export function processCombatTick(
         type: isCrit ? 'critical' : 'attack',
         isPlayerSource: false
       });
+
+      // If player is destroyed, break immediately!
+      if (nextPlayer.hp <= 0) break;
     } else if (gizmo.itemData.gizmoType === 'Shield') {
       const shieldVal = gizmo.itemData.outputEffectValue;
       if (gizmo.itemData.itemId === 'auto_repair_wrench') {
-        nextEnemy.hp = Math.min(nextEnemy.maxHp, nextEnemy.hp + shieldVal);
+        // Can ONLY heal if enemy is alive
+        if (nextEnemy.hp > 0) {
+          nextEnemy.hp = Math.min(nextEnemy.maxHp, nextEnemy.hp + shieldVal);
+          floatingNumbers.push({
+            id: `fn_eheal_${Date.now()}_${Math.random()}`,
+            x: 75,
+            y: 60,
+            value: shieldVal,
+            type: 'heal'
+          });
+        }
       } else {
         nextEnemy.shield = Math.min(nextEnemy.maxShield, nextEnemy.shield + shieldVal);
         floatingNumbers.push({
@@ -206,14 +264,13 @@ export function processCombatTick(
         });
       }
     }
-  });
+  }
 
   // Check victory / defeat
   let isFinished = false;
   let winner: 'player' | 'enemy' | null = null;
 
   if (nextEnemy.hp <= 0 && nextPlayer.hp <= 0) {
-    // Simultaneous KO -> Tie or player favor
     isFinished = true;
     winner = 'player';
   } else if (nextEnemy.hp <= 0) {

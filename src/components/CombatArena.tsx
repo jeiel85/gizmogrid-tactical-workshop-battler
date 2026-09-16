@@ -34,34 +34,57 @@ export const CombatArena: React.FC<CombatArenaProps> = ({
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
-  // Combat Clock Pulse Loop
+  const playerRef = useRef<CombatEntity>(player);
+  const enemyRef = useRef<CombatEntity>(enemy);
+  const pulseCountRef = useRef<number>(0);
+  const onCombatEndRef = useRef(onCombatEnd);
+  onCombatEndRef.current = onCombatEnd;
+
+  // Keep refs in sync with state if set externally
+  useEffect(() => {
+    playerRef.current = player;
+  }, [player]);
+
+  useEffect(() => {
+    enemyRef.current = enemy;
+  }, [enemy]);
+
+  // Combat Clock Pulse Loop (Mounts once, loops stably via timeouts)
   useEffect(() => {
     isFinishedRef.current = false;
-
-    // Normal tick: 500ms (0.5s as in GDD). If overdrive active, 160ms (300% speed)
     let timerId: NodeJS.Timeout;
 
     const runTick = () => {
       if (isFinishedRef.current) return;
 
-      const isPlayerOD = player.isOverdriveActive;
-      const isEnemyOD = enemy.isOverdriveActive;
+      const curPlayer = playerRef.current;
+      const curEnemy = enemyRef.current;
+
+      const isPlayerOD = curPlayer.isOverdriveActive;
+      const isEnemyOD = curEnemy.isOverdriveActive;
       const speedUp = isPlayerOD || isEnemyOD;
       const tickInterval = speedUp ? 160 : 500;
 
       setIsOverdriveRumbling(speedUp);
 
-      const res = processCombatTick(player, enemy, tickInterval / 1000);
+      pulseCountRef.current += 1;
+      const currentPulse = pulseCountRef.current;
+      setPulseCount(currentPulse);
+
+      const res = processCombatTick(curPlayer, curEnemy, tickInterval / 1000, currentPulse);
+      
+      // Update refs & state
+      playerRef.current = res.player;
+      enemyRef.current = res.enemy;
       setPlayer(res.player);
       setEnemy(res.enemy);
-      setPulseCount(prev => prev + 1);
 
       if (res.logs.length > 0) {
-        setLogs(prev => [...prev.slice(-25), ...res.logs]);
+        setLogs(prev => [...prev.slice(-30), ...res.logs]);
       }
 
       if (res.floatingNumbers.length > 0) {
-        setFloatingNumbers(prev => [...prev.slice(-15), ...res.floatingNumbers]);
+        setFloatingNumbers(prev => [...prev.slice(-20), ...res.floatingNumbers]);
       }
 
       if (res.isFinished && res.winner) {
@@ -70,36 +93,42 @@ export const CombatArena: React.FC<CombatArenaProps> = ({
         else soundManager.playDefeat();
 
         setTimeout(() => {
-          onCombatEnd(res.winner!);
+          onCombatEndRef.current(res.winner!);
         }, 1200);
-        return;
+        return; // Halt loop
       }
 
       timerId = setTimeout(runTick, tickInterval);
     };
 
     timerId = setTimeout(runTick, 500);
-    return () => clearTimeout(timerId);
-  }, [player, enemy, onCombatEnd]);
+    return () => {
+      isFinishedRef.current = true;
+      clearTimeout(timerId);
+    };
+  }, []);
 
   // Clean floating numbers after animation
   useEffect(() => {
     if (floatingNumbers.length === 0) return;
     const timer = setTimeout(() => {
       setFloatingNumbers([]);
-    }, 1000);
+    }, 900);
     return () => clearTimeout(timer);
   }, [floatingNumbers]);
 
   // Handle player pulling overdrive lever
   const handlePullLever = () => {
-    if (player.overdriveUsed || player.isOverdriveActive) return;
-    setPlayer(prev => ({
-      ...prev,
+    if (playerRef.current.overdriveUsed || playerRef.current.isOverdriveActive || isFinishedRef.current) return;
+
+    const nextP: CombatEntity = {
+      ...playerRef.current,
       isOverdriveActive: true,
       overdriveRemainingSec: 3.0,
       overdriveUsed: true
-    }));
+    };
+    playerRef.current = nextP;
+    setPlayer(nextP);
 
     setLogs(prev => [
       ...prev,
