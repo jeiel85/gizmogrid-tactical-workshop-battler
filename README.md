@@ -13,7 +13,7 @@
 
 ## 🎮 라이브 데모 (Live Playable Demo)
 
-👉 **[GizmoGrid 라이브 데모 플레이하기](https://jeiel85.github.io/GizmoGrid-Tactical-Workshop-Battler/)**
+👉 **[GizmoGrid 라이브 데모 플레이하기](https://jeiel85.github.io/gizmogrid-tactical-workshop-battler/)**
 
 ---
 
@@ -62,8 +62,8 @@
 
 ```bash
 # 1. 저장소 복제
-git clone https://github.com/jeiel85/GizmoGrid-Tactical-Workshop-Battler.git
-cd GizmoGrid-Tactical-Workshop-Battler
+git clone https://github.com/jeiel85/gizmogrid-tactical-workshop-battler.git
+cd gizmogrid-tactical-workshop-battler
 
 # 2. 패키지 설치
 npm install
